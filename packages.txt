@@ -1,2 +1,10 @@
-libgl1
+﻿libgl1
 libglib2.0-0t64
+ffmpeg
+libsm6
+libxext6
+libavdevice-dev
+libavfilter-dev
+libopus-dev
+libvpx-dev
+pkg-config
