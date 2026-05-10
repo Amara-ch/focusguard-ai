@@ -63,21 +63,25 @@ st.markdown('''
 RTC_CONFIG = RTCConfiguration({
     "iceServers": [
         {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]},
         {
-            "urls": ["turn:openrelay.metered.ca:80"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
+            "urls": ["turn:global.turn.metered.ca:80"],
+            "username": "af67f77bf2be46069c43713c",
+            "credential": "2M4Pk0R+f3aFgDK8",
         },
         {
-            "urls": ["turn:openrelay.metered.ca:443"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
+            "urls": ["turn:global.turn.metered.ca:80?transport=tcp"],
+            "username": "af67f77bf2be46069c43713c",
+            "credential": "2M4Pk0R+f3aFgDK8",
         },
         {
-            "urls": ["turn:openrelay.metered.ca:443?transport=tcp"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
+            "urls": ["turn:global.turn.metered.ca:443"],
+            "username": "af67f77bf2be46069c43713c",
+            "credential": "2M4Pk0R+f3aFgDK8",
+        },
+        {
+            "urls": ["turn:global.turn.metered.ca:443?transport=tcp"],
+            "username": "af67f77bf2be46069c43713c",
+            "credential": "2M4Pk0R+f3aFgDK8",
         },
     ]
 })
