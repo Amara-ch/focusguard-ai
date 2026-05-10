@@ -60,31 +60,39 @@ st.markdown('''
 ''', unsafe_allow_html=True)
 
 # ── RTC config for cloud (STUN servers for NAT traversal) ──
-RTC_CONFIG = RTCConfiguration({
-    "iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-        {
-            "urls": ["turn:global.turn.metered.ca:80"],
-            "username": "af67f77bf2be46069c43713c",
-            "credential": "2M4Pk0R+f3aFgDK8",
-        },
-        {
-            "urls": ["turn:global.turn.metered.ca:80?transport=tcp"],
-            "username": "af67f77bf2be46069c43713c",
-            "credential": "2M4Pk0R+f3aFgDK8",
-        },
-        {
-            "urls": ["turn:global.turn.metered.ca:443"],
-            "username": "af67f77bf2be46069c43713c",
-            "credential": "2M4Pk0R+f3aFgDK8",
-        },
-        {
-            "urls": ["turn:global.turn.metered.ca:443?transport=tcp"],
-            "username": "af67f77bf2be46069c43713c",
-            "credential": "2M4Pk0R+f3aFgDK8",
-        },
-    ]
-})
+# Fetch TURN credentials dynamically from Metered API
+import urllib.request, json as _json
+
+def get_rtc_config():
+    try:
+        url = "https://focusguard-ai.metered.live/api/v1/turn/credentials?apiKey=3fb14dd320c8b5fa460ee182dd2b83e0e34e"
+        with urllib.request.urlopen(url, timeout=5) as r:
+            ice_servers = _json.loads(r.read())
+        return RTCConfiguration({"iceServers": ice_servers})
+    except Exception:
+        # Fallback to hardcoded servers if API fails
+        return RTCConfiguration({
+            "iceServers": [
+                {"urls": ["stun:stun.l.google.com:19302"]},
+                {
+                    "urls": ["turn:global.turn.metered.ca:80"],
+                    "username": "af67f77bf2be46069c43713c",
+                    "credential": "2M4Pk0R+f3aFgDK8",
+                },
+                {
+                    "urls": ["turn:global.turn.metered.ca:443"],
+                    "username": "af67f77bf2be46069c43713c",
+                    "credential": "2M4Pk0R+f3aFgDK8",
+                },
+                {
+                    "urls": ["turn:global.turn.metered.ca:443?transport=tcp"],
+                    "username": "af67f77bf2be46069c43713c",
+                    "credential": "2M4Pk0R+f3aFgDK8",
+                },
+            ]
+        })
+
+RTC_CONFIG = get_rtc_config()
 
 # ── SESSION STATE ──
 for key, val in [
