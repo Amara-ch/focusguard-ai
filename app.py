@@ -7,16 +7,18 @@ import os
 import sys
 import glob
 from datetime import datetime
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from focusguard.core.vision_engine import VisionEngine
 from focusguard.models.eye_state import EyeStateDetector
-from focusguard.models.yawn_detector import YawnDetector, SoundAlarm
+from focusguard.models.yawn_detector import YawnDetector
+# BUG-05 FIX: Do NOT import or use SoundAlarm — no audio device on Azure/cloud
+# from focusguard.models.yawn_detector import SoundAlarm   ← REMOVED
 from focusguard.models.phone_detector import PhoneDetector
 from focusguard.models.head_pose import HeadPoseDetector
 from focusguard.models.object_distraction import DistractionObjectDetector
-
 
 st.set_page_config(
     page_title='FocusGuard AI',
@@ -27,32 +29,31 @@ st.set_page_config(
 
 st.markdown('''
 <style>
-    .main-title {
-        font-size: 2.5rem;
-        background: linear-gradient(90deg, #00c6ff, #0072ff);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: bold;
-        text-align: center;
-    }
-    .subtitle { text-align: center; color: #888; margin-bottom: 2rem; }
-    .metric-card {
-        background: #1e1e1e; padding: 1rem; border-radius: 10px;
-        border-left: 4px solid #00c6ff; margin: 0.5rem 0;
-    }
-    .alert-box {
-        background: #ff4b4b; color: white; padding: 0.8rem;
-        border-radius: 8px; font-weight: bold; margin: 0.3rem 0;
-        text-align: center;
-    }
-    .ok-box {
-        background: #00b050; color: white; padding: 0.8rem;
-        border-radius: 8px; font-weight: bold; margin: 0.3rem 0;
-        text-align: center;
-    }
+.main-title {
+    font-size: 2.5rem;
+    background: linear-gradient(90deg, #00c6ff, #0072ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: bold;
+    text-align: center;
+}
+.subtitle { text-align: center; color: #888; margin-bottom: 2rem; }
+.metric-card {
+    background: #1e1e1e; padding: 1rem; border-radius: 10px;
+    border-left: 4px solid #00c6ff; margin: 0.5rem 0;
+}
+.alert-box {
+    background: #ff4b4b; color: white; padding: 0.8rem;
+    border-radius: 8px; font-weight: bold; margin: 0.3rem 0;
+    text-align: center;
+}
+.ok-box {
+    background: #00b050; color: white; padding: 0.8rem;
+    border-radius: 8px; font-weight: bold; margin: 0.3rem 0;
+    text-align: center;
+}
 </style>
 ''', unsafe_allow_html=True)
-
 
 # ========= SESSION STATE INIT =========
 if 'page' not in st.session_state:
@@ -64,6 +65,8 @@ if 'detectors' not in st.session_state:
 
 
 def init_detectors(mode):
+    # BUG-07 FIX: Removed SoundAlarm() — no audio hardware on Azure container.
+    #             Audio would crash with OSError: No such device / ALSA errors.
     return {
         'mode': mode,
         'vision': VisionEngine(max_faces=3 if mode == 'student' else 1),
@@ -74,10 +77,10 @@ def init_detectors(mode):
                                  distract_frames=15),
         'obj': DistractionObjectDetector(confidence=0.40, alert_frames=8,
                                          mode=mode),
-        'alarm': SoundAlarm(),
+        # 'alarm': SoundAlarm(),   ← BUG-07: REMOVED
         'session_start': datetime.now(),
         'event_log': [],
-        'score': 100.0,
+        'score': 100.0,           # BUG-08 FIX: score starts fresh at 100.0 on every init
         'prev_drowsy': False,
         'prev_yawn': 0, 'prev_phone': 0, 'prev_head': 0, 'prev_obj': 0,
         'no_face_counter': 0, 'absent_alert': False, 'absent_logged': False,
@@ -86,7 +89,7 @@ def init_detectors(mode):
         'multi_face_logged': False, 'total_multi_face': 0,
         'focused_seconds': 0.0, 'distracted_seconds': 0.0,
         'absent_seconds': 0.0, 'last_tick': time.time(),
-        'last_alarm_state': False
+        # 'last_alarm_state': False   ← BUG-07: REMOVED (alarm gone)
     }
 
 
@@ -122,6 +125,9 @@ def get_grade(d):
 
 
 def save_report(d):
+    # BUG-10 NOTE: reports/ is ephemeral on Azure — files are lost on container restart.
+    # For production: write to Azure Blob Storage or offer st.download_button instead.
+    # Using st.download_button approach here as a reliable fallback.
     os.makedirs('reports', exist_ok=True)
     end = datetime.now()
     duration = (end - d['session_start']).total_seconds()
@@ -159,16 +165,21 @@ def save_report(d):
         },
         'event_log': d['event_log']
     }
+
     fname = 'reports/' + d['mode'] + '_session_' + end.strftime('%Y%m%d_%H%M%S') + '.json'
     with open(fname, 'w') as f:
         json.dump(report, f, indent=2)
+
     return fname, report
 
 
 def process_frame(d, frame):
-    frame = cv2.flip(frame, 1)
-    h, w = frame.shape[:2]
+    # BUG-06 FIX: Removed cv2.flip(frame, 1)
+    # st.camera_input already mirrors the image (browser-side).
+    # Double-flipping reverses left/right detection — breaks head pose & phone detection.
+    # frame = cv2.flip(frame, 1)   ← REMOVED
 
+    h, w = frame.shape[:2]
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = d['vision'].face_mesh.process(rgb)
     num_faces = len(results.multi_face_landmarks) if results.multi_face_landmarks else 0
@@ -218,9 +229,12 @@ def process_frame(d, frame):
     now = time.time()
     dt = now - d['last_tick']
     d['last_tick'] = now
+
     is_distracted = (eye_r['is_drowsy'] or yawn_r['is_yawning'] or
                      phone_r['phone_detected'] or head_r['is_distracted'] or
-                     obj_r['is_distracted'] or d['multi_face_alert'])
+                     obj_r['is_distracted'] or
+                     (d['mode'] == 'student' and d.get('multi_face_alert', False)))
+
     if d['mode'] == 'student' and d['absent_alert']:
         d['absent_seconds'] += dt
     elif is_distracted:
@@ -232,41 +246,41 @@ def process_frame(d, frame):
     if eye_r['is_drowsy'] and not d['prev_drowsy']:
         log_event(d, 'DROWSINESS')
     d['prev_drowsy'] = eye_r['is_drowsy']
+
     if yawn_r['total_yawns'] > d['prev_yawn']:
         log_event(d, 'YAWN')
-        d['prev_yawn'] = yawn_r['total_yawns']
+    d['prev_yawn'] = yawn_r['total_yawns']
+
     if phone_r['total_events'] > d['prev_phone']:
         log_event(d, 'PHONE')
-        d['prev_phone'] = phone_r['total_events']
+    d['prev_phone'] = phone_r['total_events']
+
     if head_r['total_distractions'] > d['prev_head']:
         log_event(d, 'LOOKING_AWAY', head_r['direction'])
-        d['prev_head'] = head_r['total_distractions']
+    d['prev_head'] = head_r['total_distractions']
+
     if obj_r['total_events'] > d['prev_obj']:
         log_event(d, 'DISTRACT_OBJECT', ', '.join(obj_r['object_names']))
-        d['prev_obj'] = obj_r['total_events']
+    d['prev_obj'] = obj_r['total_events']
 
-    # Build alerts
+    # Build alerts list
     alerts = []
     if d['mode'] == 'student':
-        if d['absent_alert']: alerts.append('STUDENT ABSENT')
-        if d['multi_face_alert']: alerts.append('MULTIPLE FACES')
+        if d['absent_alert']:        alerts.append('STUDENT ABSENT')
+        if d['multi_face_alert']:    alerts.append('MULTIPLE FACES')
     if eye_r['is_drowsy']:
         alerts.append('SLEEPING' if d['mode'] == 'student' else 'DROWSINESS')
-    if phone_r['phone_detected']: alerts.append('PHONE USAGE')
+    if phone_r['phone_detected']:    alerts.append('PHONE USAGE')
     if head_r['is_distracted']:
         alerts.append('LOOKING AWAY' if d['mode'] == 'student' else 'EYES OFF ROAD')
-    if yawn_r['is_yawning']: alerts.append('YAWNING')
-    if obj_r['is_distracted']: alerts.append('OBJECT DISTRACTION')
+    if yawn_r['is_yawning']:         alerts.append('YAWNING')
+    if obj_r['is_distracted']:       alerts.append('OBJECT DISTRACTION')
 
-    # Sound alarm
-    alarm_should = len(alerts) > 0
-    if alarm_should and not d['last_alarm_state']:
-        d['alarm'].play()
-    elif not alarm_should and d['last_alarm_state']:
-        d['alarm'].stop()
-    d['last_alarm_state'] = alarm_should
+    # BUG-05 FIX: No alarm calls — SoundAlarm removed entirely.
+    # The old code called d['alarm'].play() / .stop() which throws OSError on Azure
+    # (no ALSA/PulseAudio audio device in container). Alerts are visual-only now.
 
-    # Draw alerts overlay
+    # Draw overlays on frame
     if alerts:
         cv2.rectangle(frame, (0, 0), (w, h), (0, 0, 255), 6)
         y_pos = h // 2 - (len(alerts) * 25)
@@ -291,6 +305,7 @@ def process_frame(d, frame):
 
 
 # ============= PAGES =============
+
 def page_home():
     st.markdown('<div class="main-title">🛡️ FocusGuard AI</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Unified Attention Monitoring System</div>',
@@ -332,12 +347,14 @@ def page_monitor(mode):
     st.markdown('<div class="main-title">' + title + '</div>', unsafe_allow_html=True)
 
     col_back, col_btn = st.columns([1, 1])
+
     with col_back:
         if st.button('⬅️ Back to Home'):
             st.session_state.running = False
-            if st.session_state.detectors:
-                st.session_state.detectors['alarm'].cleanup()
-                st.session_state.detectors = None
+            # BUG-09 FIX: Guard against detectors being None before calling cleanup.
+            # Original code called d['alarm'].cleanup() which crashed if detectors=None.
+            # Also: alarm is removed entirely (BUG-07), so no cleanup needed.
+            st.session_state.detectors = None
             st.session_state.page = 'home'
             st.rerun()
 
@@ -350,12 +367,20 @@ def page_monitor(mode):
         else:
             if st.button('⏹️ STOP & SAVE', type='secondary', use_container_width=True):
                 if st.session_state.detectors:
-                    fname, _ = save_report(st.session_state.detectors)
-                    st.success('Report saved: ' + fname)
-                    st.session_state.detectors['alarm'].cleanup()
+                    fname, report = save_report(st.session_state.detectors)
+                    # BUG-10 FIX: Also offer download button so report isn't lost on restart
+                    report_json = json.dumps(report, indent=2)
+                    st.success('Session complete!')
+                    st.download_button(
+                        label='⬇️ Download Report JSON',
+                        data=report_json,
+                        file_name=os.path.basename(fname),
+                        mime='application/json'
+                    )
+                    # BUG-09 FIX: No alarm cleanup call needed (alarm removed)
                     st.session_state.detectors = None
                 st.session_state.running = False
-                time.sleep(2)
+                time.sleep(1)
                 st.rerun()
 
     st.markdown('---')
@@ -365,109 +390,131 @@ def page_monitor(mode):
         return
 
     col_video, col_stats = st.columns([2, 1])
-    video_placeholder = col_video.empty()
-    stats_placeholder = col_stats.empty()
-    alert_placeholder = col_stats.empty()
 
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 540)
+    with col_video:
+        st.markdown('**📷 Point your camera at your face**')
+        # ────────────────────────────────────────────────────────────────
+        # BUG-01 + BUG-02 + BUG-03 FIX:
+        #
+        # ORIGINAL (broken on Azure):
+        #   cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)   ← Windows-only API
+        #   while st.session_state.running:             ← Blocks Streamlit forever
+        #       ret, frame = cap.read()                 ← No camera on server
+        #
+        # FIX: Use st.camera_input() — runs in the BROWSER (client-side),
+        # captures one frame per Streamlit re-run, sends it to the server
+        # as a JPEG. Works on any cloud platform. No camera on server needed.
+        # ────────────────────────────────────────────────────────────────
+        img_file = st.camera_input(
+            label='Camera',
+            label_visibility='collapsed',
+            key='cam_feed'
+        )
 
-    if not cap.isOpened():
-        st.error('Could not open webcam!')
-        st.session_state.running = False
-        return
+    # BUG-04 FIX: cap variable no longer exists — no NameError risk.
+    # Original had cap.release() in a finally block but cap was only assigned
+    # inside an if-block; if VideoCapture failed, finally would throw NameError.
 
-    d = st.session_state.detectors
-    try:
-        while st.session_state.running:
-            ret, frame = cap.read()
-            if not ret:
-                break
+    if img_file is not None and st.session_state.detectors is not None:
+        d = st.session_state.detectors
 
-            frame, state = process_frame(d, frame)
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            video_placeholder.image(rgb, channels='RGB', use_container_width=True)
+        # Convert browser JPEG → BGR numpy array for OpenCV/MediaPipe/YOLO
+        pil_img = Image.open(img_file).convert('RGB')
+        frame = np.array(pil_img)
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
-            with stats_placeholder.container():
-                score = state['score']
-                if score >= 75: color = '#00c853'
-                elif score >= 50: color = '#ff9800'
-                else: color = '#f44336'
-                st.markdown(
-                    '<div class="metric-card"><h2 style="color:' + color +
-                    ';margin:0;">Score: ' + str(int(score)) +
-                    '/100</h2><p style="margin:0;color:#aaa;">' + state['grade'] +
-                    '</p></div>', unsafe_allow_html=True)
+        frame_out, state = process_frame(d, frame_bgr)
 
+        # Show processed frame with overlays back in the video column
+        rgb_out = cv2.cvtColor(frame_out, cv2.COLOR_BGR2RGB)
+        with col_video:
+            st.image(rgb_out, channels='RGB', use_container_width=True)
+
+        with col_stats:
+            score = state['score']
+            if score >= 75:   color = '#00c853'
+            elif score >= 50: color = '#ff9800'
+            else:             color = '#f44336'
+
+            st.markdown(
+                '<div class="metric-card"><h2 style="color:' + color +
+                ';margin:0;">Score: ' + str(int(score)) +
+                '/100</h2><p style="margin:0;color:#aaa;">' + state['grade'] +
+                '</p></div>', unsafe_allow_html=True)
+
+            c1, c2 = st.columns(2)
+            c1.metric('Faces', state['face_count'])
+            c2.metric('Eyes', 'CLOSE' if state['eyes_closed'] else 'OPEN')
+            c1, c2 = st.columns(2)
+            c1.metric('Blinks', state['blinks'])
+            c2.metric('Yawns', state['yawns'])
+            c1, c2 = st.columns(2)
+            c1.metric('Phone', state['phone_events'])
+            c2.metric('Away', state['away_events'])
+
+            if mode == 'student':
                 c1, c2 = st.columns(2)
-                c1.metric('Faces', state['face_count'])
-                c2.metric('Eyes', 'CLOSE' if state['eyes_closed'] else 'OPEN')
+                c1.metric('Absences', state['absences'])
+                c2.metric('Multi-Face', state['multi_faces'])
 
-                c1, c2 = st.columns(2)
-                c1.metric('Blinks', state['blinks'])
-                c2.metric('Yawns', state['yawns'])
+            st.markdown('**Head:** ' + state['head_dir'])
+            if state['object_names']:
+                st.markdown('**Objects:** ' + ', '.join(state['object_names']))
 
-                c1, c2 = st.columns(2)
-                c1.metric('Phone', state['phone_events'])
-                c2.metric('Away', state['away_events'])
-
-                if mode == 'student':
-                    c1, c2 = st.columns(2)
-                    c1.metric('Absences', state['absences'])
-                    c2.metric('Multi-Face', state['multi_faces'])
-
-                st.markdown('**Head:** ' + state['head_dir'])
-                if state['object_names']:
-                    st.markdown('**Objects:** ' + ', '.join(state['object_names']))
-
-            with alert_placeholder.container():
-                if state['alerts']:
-                    for a in state['alerts']:
-                        st.markdown('<div class="alert-box">⚠️ ' + a + '</div>',
-                                    unsafe_allow_html=True)
-                else:
-                    st.markdown('<div class="ok-box">✅ All Good</div>',
+            if state['alerts']:
+                for a in state['alerts']:
+                    st.markdown('<div class="alert-box">⚠️ ' + a + '</div>',
                                 unsafe_allow_html=True)
-    finally:
-        cap.release()
-        if d:
-            d['alarm'].stop()
+            else:
+                st.markdown('<div class="ok-box">✅ All Good</div>',
+                            unsafe_allow_html=True)
+
+    elif st.session_state.running:
+        with col_video:
+            st.info('📷 Allow camera access in your browser when prompted, then it will appear here.')
 
 
 def page_reports():
     st.markdown('<div class="main-title">📊 Session Reports</div>', unsafe_allow_html=True)
+
     if st.button('⬅️ Back to Home'):
         st.session_state.page = 'home'
         st.rerun()
+
     st.markdown('---')
 
     if not os.path.exists('reports'):
-        st.warning('No reports yet.')
+        st.warning('No reports found. Reports saved on this server are lost on restart. Use the Download button after each session.')
         return
+
     files = sorted(glob.glob('reports/*.json'), reverse=True)
     if not files:
         st.warning('No reports yet.')
         return
 
     st.write('**' + str(len(files)) + ' sessions found.**')
+
     for f in files[:20]:
         try:
             with open(f) as fp:
                 data = json.load(fp)
         except Exception:
             continue
+
         mode = data.get('mode', 'UNKNOWN')
         score_key = 'safety_score' if mode == 'DRIVER' else 'focus_score'
         grade_key = 'safety_grade' if mode == 'DRIVER' else 'focus_grade'
         emoji = '🚗' if mode == 'DRIVER' else '📚'
         title = emoji + ' ' + mode + ' - ' + data['session_start'][:19]
+
         with st.expander(title):
             c1, c2, c3 = st.columns(3)
             c1.metric('Score', '%.0f/100' % data[score_key])
             c2.metric('Grade', data[grade_key])
             c3.metric('Duration', '%.0f sec' % data['duration_seconds'])
+
             st.json(data.get('stats', {}))
+
             if 'time_breakdown' in data:
                 tb = data['time_breakdown']
                 st.progress(int(tb['focused_pct']),
@@ -476,8 +523,18 @@ def page_reports():
                             text='Distracted: %.0f%%' % tb['distracted_pct'])
                 st.progress(int(tb['absent_pct']),
                             text='Absent: %.0f%%' % tb['absent_pct'])
+
             if data.get('event_log'):
                 st.dataframe(data['event_log'], use_container_width=True)
+
+            # BUG-10 FIX: Offer re-download of any report shown here
+            st.download_button(
+                label='⬇️ Download this report',
+                data=json.dumps(data, indent=2),
+                file_name=os.path.basename(f),
+                mime='application/json',
+                key='dl_' + os.path.basename(f)
+            )
 
 
 def main():
