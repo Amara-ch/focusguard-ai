@@ -89,5 +89,4 @@ focusguard-ai/
 MIT
 
 ## 👨‍💻 Author
-
-Built as a Final Year Project — 2026
+Amara Tariq 
