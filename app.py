@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 import cv2
 import numpy as np
 import time
@@ -166,6 +166,7 @@ def save_report(d):
 
 
 def process_frame(d, frame):
+    # frame already BGR numpy array from camera_input
     frame = cv2.flip(frame, 1)
     h, w = frame.shape[:2]
 
@@ -258,14 +259,6 @@ def process_frame(d, frame):
     if yawn_r['is_yawning']: alerts.append('YAWNING')
     if obj_r['is_distracted']: alerts.append('OBJECT DISTRACTION')
 
-    # Sound alarm
-    alarm_should = len(alerts) > 0
-    if alarm_should and not d['last_alarm_state']:
-        d['alarm'].play()
-    elif not alarm_should and d['last_alarm_state']:
-        d['alarm'].stop()
-    d['last_alarm_state'] = alarm_should
-
     # Draw alerts overlay
     if alerts:
         cv2.rectangle(frame, (0, 0), (w, h), (0, 0, 255), 6)
@@ -342,12 +335,7 @@ def page_monitor(mode):
             st.rerun()
 
     with col_btn:
-        if not st.session_state.running:
-            if st.button('▶️ START', type='primary', use_container_width=True):
-                st.session_state.detectors = init_detectors(mode)
-                st.session_state.running = True
-                st.rerun()
-        else:
+        if st.session_state.running:
             if st.button('⏹️ STOP & SAVE', type='secondary', use_container_width=True):
                 if st.session_state.detectors:
                     fname, _ = save_report(st.session_state.detectors)
@@ -355,41 +343,39 @@ def page_monitor(mode):
                     st.session_state.detectors['alarm'].cleanup()
                     st.session_state.detectors = None
                 st.session_state.running = False
-                time.sleep(2)
                 st.rerun()
 
     st.markdown('---')
 
+    # ---- KEY CHANGE: st.camera_input instead of cv2.VideoCapture ----
+    st.info('📷 Allow camera access when browser asks. Each photo will be analyzed.')
+    
     if not st.session_state.running:
-        st.info('Click ▶️ START to begin monitoring.')
+        if st.button('▶️ START Monitoring', type='primary', use_container_width=True):
+            st.session_state.detectors = init_detectors(mode)
+            st.session_state.running = True
+            st.rerun()
         return
 
-    col_video, col_stats = st.columns([2, 1])
-    video_placeholder = col_video.empty()
-    stats_placeholder = col_stats.empty()
-    alert_placeholder = col_stats.empty()
+    # Camera input - browser captures frame
+    camera_image = st.camera_input('📸 Live Camera Feed (click to capture)')
 
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 540)
+    if camera_image is not None:
+        # Convert to OpenCV format
+        file_bytes = np.asarray(bytearray(camera_image.read()), dtype=np.uint8)
+        frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-    if not cap.isOpened():
-        st.error('Could not open webcam!')
-        st.session_state.running = False
-        return
-
-    d = st.session_state.detectors
-    try:
-        while st.session_state.running:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
+        if frame is not None:
+            d = st.session_state.detectors
             frame, state = process_frame(d, frame)
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            video_placeholder.image(rgb, channels='RGB', use_container_width=True)
 
-            with stats_placeholder.container():
+            col_video, col_stats = st.columns([2, 1])
+
+            with col_video:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                st.image(rgb, channels='RGB', use_container_width=True)
+
+            with col_stats:
                 score = state['score']
                 if score >= 75: color = '#00c853'
                 elif score >= 50: color = '#ff9800'
@@ -421,7 +407,6 @@ def page_monitor(mode):
                 if state['object_names']:
                     st.markdown('**Objects:** ' + ', '.join(state['object_names']))
 
-            with alert_placeholder.container():
                 if state['alerts']:
                     for a in state['alerts']:
                         st.markdown('<div class="alert-box">⚠️ ' + a + '</div>',
@@ -429,10 +414,8 @@ def page_monitor(mode):
                 else:
                     st.markdown('<div class="ok-box">✅ All Good</div>',
                                 unsafe_allow_html=True)
-    finally:
-        cap.release()
-        if d:
-            d['alarm'].stop()
+    else:
+        st.warning('⏳ Waiting for camera... Allow access and take a photo above.')
 
 
 def page_reports():
